@@ -84,7 +84,7 @@ def run_tests():
         # ---------------------------------------------------------------------
         # SKENARIO 3: Kontrol Akses / Broken Access Control (RBAC)
         # ---------------------------------------------------------------------
-        # Logout admin, buat sesi sebagai user biasa (petugas)
+        # Logout admin, buat sesi sebagai user biasa (petugas gudang)
         client.get('/logout')
         with client.session_transaction() as sess:
             sess['user_id'] = 999
@@ -92,17 +92,19 @@ def run_tests():
             sess['role'] = 'petugas'
             sess['csrf_token'] = valid_csrf
 
-        # Petugas mencoba akses halaman Audit Log khusus Admin
+        # 1. Petugas mencoba akses halaman Audit Log khusus Admin
         res_rbac1 = client.get('/audit_log')
-        # Petugas mencoba hapus barang (ID: 1)
+        # 2. Petugas mencoba hapus barang (ID: 1)
         res_rbac2 = client.post('/hapus_barang/1', data={'csrf_token': valid_csrf})
+        # 3. Petugas mencoba menambah barang baru (DILARANG: Hanya Admin yang boleh tambah barang)
+        res_rbac3 = client.post('/tambah_barang', data={'nama_barang': 'Barang Ilegal Petugas', 'deskripsi': 'Uji RBAC', 'csrf_token': valid_csrf})
 
-        rbac_passed = (res_rbac1.status_code == 403 and res_rbac2.status_code == 403)
+        rbac_passed = (res_rbac1.status_code == 403 and res_rbac2.status_code == 403 and res_rbac3.status_code == 403)
         results.append({
             'no': 3,
             'skenario': 'Broken Access Control (Hak Akses Petugas vs Admin)',
-            'metode': "User ber-role 'petugas' mengakses /audit_log dan POST /hapus_barang/1",
-            'ekspektasi': 'Akses Ditolak (HTTP 403 Forbidden)',
+            'metode': "Petugas mengakses /audit_log, POST /hapus_barang, & POST /tambah_barang",
+            'ekspektasi': 'Semua aksi non-petugas ditolak (HTTP 403 Forbidden)',
             'status': 'LOLOS (SECURE)' if rbac_passed else 'GAGAL'
         })
 
@@ -222,6 +224,46 @@ def run_tests():
             'metode': 'Uji Create, Read, Update (Edit Data & Stok), dan Delete secara berurutan',
             'ekspektasi': 'Semua operasi CRUD berhasil dieksekusi tanpa error',
             'status': 'LOLOS (BERFUNGSI)' if crud_passed else 'GAGAL'
+        })
+
+        # ---------------------------------------------------------------------
+        # SKENARIO 9: Fitur Restock Petugas Gudang & Ekspor Laporan Resmi PDF
+        # ---------------------------------------------------------------------
+        # Sesi petugas gudang
+        with client.session_transaction() as sess:
+            sess['user_id'] = 2
+            sess['username'] = 'petugas_gudang'
+            sess['role'] = 'petugas'
+            petugas_csrf = sess.get('csrf_token')
+
+        # 1. Pastikan minimal ada 1 barang untuk direstock
+        with app.app_context():
+            barang_sample = Barang.query.first()
+            if not barang_sample:
+                b_new = Barang(nama_barang="Komoditas Test PDF", deskripsi="Sample", jumlah_stok=10)
+                db.session.add(b_new)
+                db.session.commit()
+                b_id = b_new.id
+            else:
+                b_id = barang_sample.id
+
+        # 2. Petugas melakukan restock barang masuk
+        res_restock = client.post('/restock_barang', data={'id_barang': b_id, 'jumlah': 15, 'csrf_token': petugas_csrf}, follow_redirects=True)
+        # 3. Unduh Laporan PDF
+        res_pdf = client.get('/laporan_pdf')
+
+        pdf_ok = (
+            res_restock.status_code == 200 and
+            res_pdf.status_code == 200 and
+            res_pdf.mimetype == 'application/pdf' and
+            res_pdf.data.startswith(b'%PDF')
+        )
+        results.append({
+            'no': 9,
+            'skenario': 'Restock Petugas Gudang & Unduh Laporan PDF',
+            'metode': 'POST /restock_barang oleh Petugas dan GET /laporan_pdf',
+            'ekspektasi': 'Restock sukses tercatat & PDF valid dihasilkan (mimetype application/pdf)',
+            'status': 'LOLOS (BERFUNGSI)' if pdf_ok else 'GAGAL'
         })
 
     # Cetak Tabel Hasil

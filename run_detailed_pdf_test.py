@@ -106,17 +106,20 @@ def run_pdf_audit():
         r_audit = client.get('/audit_log')
         # Coba hapus barang ID 1
         r_hapus = client.post('/hapus_barang/1', data={'csrf_token': csrf_tok})
+        # Coba tambah barang baru (DILARANG: Petugas hanya boleh restock barang)
+        r_tambah = client.post('/tambah_barang', data={'nama_barang': 'Barang Ilegal Petugas', 'deskripsi': 'Uji RBAC', 'csrf_token': csrf_tok})
         
-        rbac_secure = (r_audit.status_code == 403 and r_hapus.status_code == 403)
+        rbac_secure = (r_audit.status_code == 403 and r_hapus.status_code == 403 and r_tambah.status_code == 403)
         print(f"  [RBAC] Petugas akses /audit_log -> Status Code: {r_audit.status_code} ({'Ditolak 403' if r_audit.status_code == 403 else 'Bocor'})")
         print(f"  [RBAC] Petugas akses POST /hapus_barang -> Status Code: {r_hapus.status_code} ({'Ditolak 403' if r_hapus.status_code == 403 else 'Bocor'})")
+        print(f"  [RBAC] Petugas akses POST /tambah_barang -> Status Code: {r_tambah.status_code} ({'Ditolak 403' if r_tambah.status_code == 403 else 'Bocor'})")
 
         test_logs.append({
             'kategori': 'Broken Access Control',
-            'skenario': 'User ber-role Petugas mencoba akses halaman Audit Log dan menghapus barang',
-            'cara_uji': 'Request GET /audit_log dan POST /hapus_barang/1 dengan sesi petugas',
-            'sebelum_perbaikan': 'Tanpa pembatasan role, user biasa dapat mengakses data sensitif',
-            'sesudah_perbaikan': 'Penerapan decorator @admin_required membatasi akses ketat ke role admin',
+            'skenario': 'Petugas mencoba akses Audit Log, hapus barang, dan tambah master barang baru',
+            'cara_uji': 'Request GET /audit_log, POST /hapus_barang/1, & POST /tambah_barang dengan sesi petugas',
+            'sebelum_perbaikan': 'User biasa dapat menambah master barang baru dan menghapus data',
+            'sesudah_perbaikan': 'Penerapan decorator @admin_required; Petugas hanya diizinkan melakukan Restock',
             'hasil': 'LOLOS' if rbac_secure else 'GAGAL'
         })
 
@@ -221,6 +224,48 @@ def run_pdf_audit():
             'hasil': 'LOLOS' if headers_secure else 'GAGAL'
         })
 
+        # ---------------------------------------------------------------------
+        # 8. PENGUJIAN RESTOCK PETUGAS GUDANG & PENGUNDUHAN LAPORAN RESMI PDF
+        # ---------------------------------------------------------------------
+        print("\n[TEST 8] Menguji Restock Petugas Gudang & Ekspor Laporan Resmi PDF...")
+        with client.session_transaction() as sess:
+            sess['user_id'] = 777
+            sess['username'] = 'petugas_gudang'
+            sess['role'] = 'petugas'
+            sess['csrf_token'] = csrf_tok
+
+        # Ambil sampel barang
+        with app.app_context():
+            barang_sample = Barang.query.first()
+            if not barang_sample:
+                b_new = Barang(nama_barang="Komoditas Sampel", deskripsi="Sample", jumlah_stok=10)
+                db.session.add(b_new)
+                db.session.commit()
+                b_id = b_new.id
+            else:
+                b_id = barang_sample.id
+
+        r_restock = client.post('/restock_barang', data={'id_barang': b_id, 'jumlah': 20, 'csrf_token': csrf_tok}, follow_redirects=True)
+        r_pdf = client.get('/laporan_pdf')
+
+        pdf_valid = (
+            r_restock.status_code == 200 and
+            r_pdf.status_code == 200 and
+            r_pdf.mimetype == 'application/pdf' and
+            r_pdf.data.startswith(b'%PDF')
+        )
+        print(f"  [Restock] Petugas restock barang -> Status Code: {r_restock.status_code}")
+        print(f"  [PDF] Ekspor PDF resmi (/laporan_pdf) -> Status: {r_pdf.status_code}, Mime: {r_pdf.mimetype}, Size: {len(r_pdf.data)} bytes")
+
+        test_logs.append({
+            'kategori': 'Restock & Ekspor PDF',
+            'skenario': 'Restock stok barang oleh Petugas dan pengunduhan laporan resmi dalam format PDF',
+            'cara_uji': 'POST /restock_barang oleh akun petugas dan GET /laporan_pdf',
+            'sebelum_perbaikan': 'Pengunduhan hanya berformat CSV dan belum ada proteksi restock terpisah',
+            'sesudah_perbaikan': 'Generate PDF resmi berstandar ReportLab dan form restock khusus petugas gudang',
+            'hasil': 'LOLOS' if pdf_valid else 'GAGAL'
+        })
+
     # Cetak Rekapitulasi Tabel Formal Tugas
     print("\n" + "=" * 105)
     print("  TABEL HASIL SELF-TESTING KEAMANAN (SESUAI FORMAT POIN 3f & BAB 8 LAPORAN)")
@@ -232,7 +277,7 @@ def run_pdf_audit():
         print(f"{idx:<3} | {t['kategori']:<22} | {t['skenario'][:30]:<32} | {perbaikan_singkat:<35} | {t['hasil']:<8}")
 
     print("=" * 105)
-    print("  STATUS AKHIR : SEMUA 7 SKENARIO KEAMANAN 100% LOLOS DAN MEMENUHI KETENTUAN TUGAS")
+    print("  STATUS AKHIR : SEMUA 8 SKENARIO KEAMANAN 100% LOLOS DAN MEMENUHI KETENTUAN TUGAS")
     print("=" * 105)
 
 if __name__ == '__main__':

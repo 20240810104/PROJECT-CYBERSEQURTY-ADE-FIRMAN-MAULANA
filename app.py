@@ -5,13 +5,20 @@ import secrets
 import hmac
 import bcrypt
 import csv
-from io import StringIO
+from io import StringIO, BytesIO
 from functools import wraps
 from datetime import datetime, timedelta
 from collections import defaultdict
 from flask import Flask, render_template, request, redirect, url_for, session, Response
 from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
+
+# Library Pembuatan Laporan PDF Resmi (ReportLab)
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
 
 load_dotenv()
 app = Flask(__name__)
@@ -230,7 +237,10 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'role' not in session or session['role'] != 'admin':
-            return "Akses Ditolak! Halaman ini hanya untuk Admin.", 403
+            user_aktor = session.get('username', 'anonim')
+            log_activity('ACCESS_DENIED', user_aktor,
+                         f"Percobaan akses tidak sah ke '{request.path}' (Role: {session.get('role', 'none')}).")
+            return "⛔ Akses Ditolak! Tindakan ini hanya diizinkan untuk Admin.", 403
         return f(*args, **kwargs)
     return decorated_function
 
@@ -379,22 +389,26 @@ def logout():
     return redirect(url_for('login'))
 
 # ==========================================
-# ROUTING CRUD & LAPORAN TUGAS BESAR
+# ROUTING CRUD, RESTOCK & LAPORAN RESMI PDF
 # ==========================================
 @app.route('/tambah_barang', methods=['POST'])
+@admin_required
 def tambah_barang():
+    """Hanya Admin yang diizinkan mendaftarkan komoditas barang baru."""
     if 'user_id' not in session: return redirect(url_for('login'))
-    nama = request.form['nama_barang'].strip()
+    nama = request.form.get('nama_barang', '').strip()
     if not nama:
         return "Nama barang wajib diisi!", 400
     barang_baru = Barang(nama_barang=nama, deskripsi=request.form.get('deskripsi', '').strip())
     db.session.add(barang_baru)
     db.session.commit()
-    log_activity('TAMBAH', session.get('username'), f"Menambahkan barang baru: '{nama}'.")
+    log_activity('TAMBAH', session.get('username'), f"Admin menambahkan master barang baru: '{nama}'.")
     return redirect(url_for('index'))
 
 @app.route('/edit_barang/<int:id>', methods=['POST'])
+@admin_required
 def edit_barang(id):
+    """Hanya Admin yang diizinkan mengubah metadata barang."""
     if 'user_id' not in session: return redirect(url_for('login'))
     barang = Barang.query.get_or_404(id)
     nama_lama = barang.nama_barang
@@ -407,7 +421,7 @@ def edit_barang(id):
     barang.nama_barang = nama_baru
     barang.deskripsi = deskripsi_baru
     db.session.commit()
-    log_activity('EDIT_BARANG', session.get('username'), f"Mengubah data barang ID {id}: '{nama_lama}' -> '{nama_baru}'.")
+    log_activity('EDIT_BARANG', session.get('username'), f"Admin mengubah data barang ID {id}: '{nama_lama}' -> '{nama_baru}'.")
     return redirect(url_for('index'))
 
 @app.route('/hapus_barang/<int:id>', methods=['POST'])
@@ -421,6 +435,40 @@ def hapus_barang(id):
     db.session.delete(barang)
     db.session.commit()
     log_activity('HAPUS', session.get('username'), f"Menghapus barang: '{nama}' (ID: {id}).")
+    return redirect(url_for('index'))
+
+@app.route('/restock_barang', methods=['POST'])
+def restock_barang():
+    """
+    Fitur Utama Petugas Gudang & Admin:
+    Menambahkan restock barang masuk ke gudang untuk barang yang sudah terdaftar.
+    """
+    if 'user_id' not in session: return redirect(url_for('login'))
+
+    id_barang = request.form.get('id_barang')
+    jumlah_raw = request.form.get('jumlah')
+
+    if not id_barang or not jumlah_raw:
+        return "Data restock barang tidak lengkap!", 400
+
+    try:
+        jumlah = int(jumlah_raw)
+        if jumlah <= 0:
+            return "Jumlah unit restock harus lebih dari 0!", 400
+    except ValueError:
+        return "Jumlah unit restock tidak valid!", 400
+
+    barang = Barang.query.get_or_404(int(id_barang))
+    barang.jumlah_stok += jumlah
+
+    # Simpan riwayat mutasi stok masuk
+    riwayat = RiwayatStok(id_barang=barang.id, jenis='masuk', jumlah=jumlah, user_id=session['user_id'])
+    db.session.add(riwayat)
+    db.session.commit()
+
+    user_aktor = session.get('username', 'Petugas')
+    log_activity('RESTOCK', user_aktor,
+                 f"Restock barang '{barang.nama_barang}': +{jumlah} unit (Total stok sekarang: {barang.jumlah_stok}).")
     return redirect(url_for('index'))
 
 @app.route('/update_stok/<int:id>', methods=['POST'])
@@ -446,8 +494,210 @@ def update_stok(id):
                  f"Stok '{barang.nama_barang}' {jenis} {jumlah} unit (sisa: {barang.jumlah_stok}).")
     return redirect(url_for('index'))
 
+@app.route('/laporan_pdf')
+def laporan_pdf():
+    """
+    Menghasilkan dan mengunduh Laporan Resmi Inventaris & Mutasi Stok dalam format PDF.
+    Diformat rapi menggunakan ReportLab dengan header resmi, ringkasan stok, dan riwayat mutasi.
+    """
+    if 'user_id' not in session: return redirect(url_for('login'))
+
+    user_aktor = session.get('username', 'Pengguna')
+    role_aktor = session.get('role', 'petugas')
+    barang_list = Barang.query.order_by(Barang.nama_barang.asc()).all()
+    riwayat_list = RiwayatStok.query.order_by(RiwayatStok.tanggal.desc()).all()
+
+    pdf_buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        pdf_buffer,
+        pagesize=A4,
+        rightMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Heading1'],
+        fontName='Helvetica-Bold',
+        fontSize=16,
+        leading=20,
+        textColor=colors.HexColor('#1a1a2e'),
+        alignment=1,
+        spaceAfter=4
+    )
+    subtitle_style = ParagraphStyle(
+        'DocSubtitle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor('#555555'),
+        alignment=1,
+        spaceAfter=14
+    )
+    meta_style = ParagraphStyle(
+        'MetaStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=8.5,
+        leading=12,
+        textColor=colors.HexColor('#333333')
+    )
+    section_style = ParagraphStyle(
+        'SectionHeading',
+        parent=styles['Heading2'],
+        fontName='Helvetica-Bold',
+        fontSize=11,
+        leading=15,
+        textColor=colors.HexColor('#0f3460'),
+        spaceBefore=10,
+        spaceAfter=5
+    )
+    cell_style = ParagraphStyle(
+        'CellText',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=8,
+        leading=10
+    )
+    cell_header = ParagraphStyle(
+        'CellHeader',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=8,
+        leading=10,
+        textColor=colors.whitesmoke
+    )
+
+    story = []
+
+    # 1. Header Judul Laporan
+    story.append(Paragraph("LAPORAN RESMI INVENTARIS &amp; MUTASI STOK GUDANG", title_style))
+    story.append(Paragraph("Sistem Manajemen Inventaris Gudang Aman (Cyber Security Web)", subtitle_style))
+
+    # 2. Kotak Metadata Informasi
+    waktu_cetak = datetime.now().strftime("%d-%m-%Y %H:%M:%S WIB")
+    meta_data = [
+        [
+            Paragraph(f"<b>Tanggal Ekspor:</b> {waktu_cetak}", meta_style),
+            Paragraph(f"<b>Operator Cetak:</b> {user_aktor} ({role_aktor.upper()})", meta_style)
+        ],
+        [
+            Paragraph(f"<b>Total Jenis Barang:</b> {len(barang_list)} Komoditas", meta_style),
+            Paragraph(f"<b>Total Riwayat Mutasi:</b> {len(riwayat_list)} Transaksi", meta_style)
+        ]
+    ]
+    meta_table = Table(meta_data, colWidths=[9 * cm, 9 * cm])
+    meta_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8f9fa')),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#dee2e6')),
+        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#dee2e6')),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('LEFTPADDING', (0,0), (-1,-1), 8),
+        ('RIGHTPADDING', (0,0), (-1,-1), 8),
+    ]))
+    story.append(meta_table)
+    story.append(Spacer(1, 10))
+
+    # 3. Tabel Sisa Stok Barang
+    story.append(Paragraph("1. Ringkasan Sisa Stok Barang Terkini", section_style))
+    stok_table_data = [[
+        Paragraph("No", cell_header),
+        Paragraph("ID", cell_header),
+        Paragraph("Nama Komoditas", cell_header),
+        Paragraph("Deskripsi", cell_header),
+        Paragraph("Sisa Stok", cell_header),
+        Paragraph("Status", cell_header)
+    ]]
+
+    for idx, b in enumerate(barang_list, 1):
+        status_text = "⚠️ Menipis" if b.jumlah_stok <= 5 else "✅ Normal"
+        stok_table_data.append([
+            Paragraph(str(idx), cell_style),
+            Paragraph(f"#{b.id}", cell_style),
+            Paragraph(b.nama_barang or '-', cell_style),
+            Paragraph(b.deskripsi or '-', cell_style),
+            Paragraph(f"<b>{b.jumlah_stok}</b> unit", cell_style),
+            Paragraph(status_text, cell_style)
+        ])
+
+    t_stok = Table(stok_table_data, colWidths=[1 * cm, 1.5 * cm, 6 * cm, 5 * cm, 2.3 * cm, 2.2 * cm])
+    t_stok.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#16213e')),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cccccc')),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f9f9f9')])
+    ]))
+    story.append(t_stok)
+    story.append(Spacer(1, 12))
+
+    # 4. Tabel Riwayat Mutasi Stok
+    story.append(Paragraph("2. Riwayat Mutasi &amp; Restock Stok", section_style))
+    mutasi_table_data = [[
+        Paragraph("ID", cell_header),
+        Paragraph("Waktu Transaksi", cell_header),
+        Paragraph("Nama Barang", cell_header),
+        Paragraph("Jenis Mutasi", cell_header),
+        Paragraph("Jumlah", cell_header),
+        Paragraph("Petugas Aktor", cell_header)
+    ]]
+
+    if riwayat_list:
+        for r in riwayat_list[:50]:  # Tampilkan 50 mutasi mutakhir di PDF
+            waktu_str = r.tanggal.strftime("%d/%m/%Y %H:%M") if r.tanggal else '-'
+            jenis_str = "Masuk / Restock" if r.jenis == 'masuk' else "Keluar"
+            nama_b = r.barang.nama_barang if r.barang else f"Barang #{r.id_barang}"
+            user_str = r.user.username if r.user else "User"
+            mutasi_table_data.append([
+                Paragraph(str(r.id), cell_style),
+                Paragraph(waktu_str, cell_style),
+                Paragraph(nama_b, cell_style),
+                Paragraph(jenis_str, cell_style),
+                Paragraph(f"<b>{r.jumlah}</b> unit", cell_style),
+                Paragraph(user_str, cell_style)
+            ])
+    else:
+        mutasi_table_data.append([
+            Paragraph("-", cell_style),
+            Paragraph("Belum ada riwayat transaksi", cell_style),
+            Paragraph("-", cell_style),
+            Paragraph("-", cell_style),
+            Paragraph("-", cell_style),
+            Paragraph("-", cell_style)
+        ])
+
+    t_mutasi = Table(mutasi_table_data, colWidths=[1.2 * cm, 3.8 * cm, 5.5 * cm, 3.5 * cm, 2 * cm, 2 * cm])
+    t_mutasi.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#0f3460')),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cccccc')),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f9f9f9')])
+    ]))
+    story.append(t_mutasi)
+
+    doc.build(story)
+    pdf_buffer.seek(0)
+
+    log_activity('EXPORT_PDF', user_aktor, "Mengunduh laporan inventaris dan mutasi stok dalam format PDF.")
+    return Response(
+        pdf_buffer.getvalue(),
+        mimetype="application/pdf",
+        headers={"Content-Disposition": "attachment;filename=Laporan_Inventaris_Stok.pdf"}
+    )
+
 @app.route('/laporan_csv')
 def laporan_csv():
+    """Fallback unduh format CSV."""
     if 'user_id' not in session: return redirect(url_for('login'))
 
     riwayat = RiwayatStok.query.all()

@@ -34,21 +34,29 @@ Aplikasi ini dirancang sebagai fondasi penelitian tingkat akhir dengan topik yan
 
 ## 2. 🚀 Fitur Utama Sistem
 
-### A. Pengelolaan Data Lengkap (CRUD)
-- **Create :** Penambahan komoditas barang baru dengan sanitasi input otomatis.
-- **Read   :** Katalog inventaris real-time, sisa stok, deskripsi, dan visual status stok menipis (≤ 5 unit).
-- **Update :** 
-  - Modal interaktif pengubahan nama dan deskripsi barang.
-  - Formulir mutasi stok masuk (`masuk`) dan keluar (`keluar`) dengan validasi kuantitas.
-- **Delete :** Penghapusan barang permanen dengan konfirmasi interaktif (khusus role Administrator) dan perlindungan integritas referensial database (*foreign key safe*).
+### A. Pengelolaan Data & Pemisahan Peran (RBAC)
+- **Role Administrator (👑 Admin):**
+  - **Create Master Data :** Menambahkan komoditas barang baru ke katalog master inventaris.
+  - **Update Master Data :** Mengubah nama dan deskripsi barang.
+  - **Delete Data        :** Menghapus barang permanen (dilengkapi konfirmasi interaktif & pembersihan riwayat mutasi terkait secara aman).
+  - **Audit Log Keamanan :** Melihat rekaman jejak audit forensik aktivitas pengguna.
+  - **Manajemen Stok     :** Melakukan update & restock kuantitas stok barang.
+  - **Laporan Resmi PDF  :** Mengunduh dokumen resmi laporan stok dalam format PDF.
+- **Role Petugas Gudang (👷 Petugas):**
+  - **Operasional Restock :** Menambahkan restock kuantitas barang masuk untuk barang yang sudah terdaftar.
+  - **Pembaruan Stok      :** Melakukan pencatatan mutasi kuantitas keluar/masuk.
+  - **Restriksi Ketat     :** **Dilarang keras** menambahkan master barang baru, mengubah data master, maupun menghapus barang (otomatis diblokir dengan HTTP 403 Forbidden via decorator `@admin_required`).
+  - **Laporan Resmi PDF  :** Dapat mengunduh dokumen resmi laporan stok PDF.
 
 ### B. Fitur Laporan 3-in-1 (Poin 3a Modul)
-1. **Tabel Rekapitulasi :** Kartu statistik total jenis barang, total kuantitas stok, dan peringatan stok kritis.
+1. **Tabel Rekapitulasi :** Kartu statistik total jenis barang, total kuantitas stok, dan peringatan stok kritis (≤ 5 unit).
 2. **Visualisasi Data Dinamis (Chart.js):**
-   - **Bar Chart :** Perbandingan stok per komoditas dengan palet warna dinamis (Merah jika ≤ 5, Biru jika aman).
+   - **Bar Chart :** Perbandingan sisa stok per komoditas dengan palet warna dinamis (Merah jika ≤ 5, Biru jika aman).
    - **Doughnut Chart :** Rasio total akumulasi mutasi barang masuk vs keluar.
-   - **Line Chart :** Analisis tren temporal 10 transaksi mutasi stok terakhir.
-3. **Ekspor Dokumen :** Unduh riwayat mutasi stok dalam format file resmi `Laporan_Stok.csv`.
+   - **Line Chart :** Analisis tren temporal transaksi mutasi stok mutakhir.
+3. **Ekspor Dokumen Resmi (PDF & CSV):**
+   - **Format PDF (Utama):** Unduh dokumen formal `Laporan_Inventaris_Stok.pdf` yang di-generate langsung dari server via engine ReportLab lengkap dengan kop laporan, metadata operator, ringkasan sisa stok, dan riwayat mutasi.
+   - **Format CSV (Alternatif):** Tersedia opsi ekspor berkas tabular CSV untuk kebutuhan olah data spreadsheet lanjutan.
 
 ---
 
@@ -81,14 +89,15 @@ No  | Kategori Serangan          | Skenario Pengujian                 | Metode U
 ---------------------------------------------------------------------------------------------------------
 1   | SQL Injection (SQLi)       | Bypass autentikasi login           | Payload: ' OR '1'='1' --              | LOLOS (SECURE)
 2   | Cross-Site Scripting (XSS) | Injeksi skrip pada nama barang     | Payload: <script>alert(1)</script>    | LOLOS (SECURE)
-3   | Broken Access Control      | Petugas akses rute /audit_log      | Sesi Petugas memanggil endpoint Admin | LOLOS (SECURE)
+3   | Broken Access Control      | Petugas akses audit & tambah baru  | Sesi Petugas memanggil endpoint Admin | LOLOS (SECURE)
 4   | Password Policy            | Pendaftaran password lemah         | Sandi '123456' / 'password'           | LOLOS (SECURE)
 5   | Brute-Force Rate Limiting  | Serangan tebakan berulang          | 5x password salah berturut-turut      | LOLOS (SECURE)
 6   | Proteksi CSRF              | Mutasi data tanpa token CSRF       | POST /tambah_barang tanpa token       | LOLOS (SECURE)
 7   | HTTP Security Headers      | Analisis header respon OWASP       | Inspeksi X-Frame-Options, nosniff, CSP| LOLOS (SECURE)
 8   | Integritas Data (CRUD)     | Siklus lengkap data barang & stok  | Uji Create, Read, Update, Delete      | LOLOS (BERFUNGSI)
+9   | Restock & Ekspor PDF       | Restock Petugas & Generate PDF     | POST /restock_barang & GET /laporan_pdf| LOLOS (BERFUNGSI)
 =========================================================================================================
-KESIMPULAN: 8 DARI 8 SKENARIO LOLOS 100% (ZERO CRITICAL VULNERABILITY)
+KESIMPULAN: 9 DARI 9 SKENARIO LOLOS 100% (ZERO CRITICAL VULNERABILITY)
 =========================================================================================================
 ```
 
@@ -175,5 +184,5 @@ Sesuai ketentuan Poin 3e tugas, penggunaan asisten AI dilaporkan secara transpar
 
 | Role Akun | Username | Password | Deskripsi Hak Akses |
 |---|---|---|---|
-| **Administrator** | `admin` | `admin` (atau `admin123`) | **Akses Penuh:** Kelola CRUD Barang, Mutasi Stok, Hapus Barang, Audit Log Keamanan, Ekspor CSV. |
-| **Petugas Gudang** | Dapat didaftarkan via menu `/register` | *Kombinasi sandi kuat (min 8 char, uppercase, number, symbol)* | **Akses Terbatas:** Tambah Barang, Ubah Info Barang, Mutasi Stok, Ekspor CSV (Dilarang hapus & buka audit log). |
+| **Administrator** | `admin` | `admin` (atau `admin123`) | **Akses Penuh:** Kelola CRUD Barang, Tambah Komoditas Baru, Edit Master, Hapus Barang, Audit Log, Update/Restock Stok, Ekspor PDF. |
+| **Petugas Gudang** | Dapat didaftarkan via menu `/register` | *Kombinasi sandi kuat (min 8 char, uppercase, number, symbol)* | **Akses Operasional:** Menambahkan Restock Barang Masuk, Update Stok, Ekspor PDF (Dibatasi ketat dari tambah master barang baru, edit master, hapus, dan audit log). |
