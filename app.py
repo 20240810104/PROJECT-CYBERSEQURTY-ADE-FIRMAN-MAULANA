@@ -9,7 +9,7 @@ from io import StringIO, BytesIO
 from functools import wraps
 from datetime import datetime, timedelta
 from collections import defaultdict
-from flask import Flask, render_template, request, redirect, url_for, session, Response
+from flask import Flask, render_template, request, redirect, url_for, session, Response, flash
 from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
 
@@ -157,7 +157,8 @@ with app.app_context():
 def log_activity(event_type, username, detail):
     """Menyimpan satu baris log ke tabel AuditLog."""
     ip = request.remote_addr or 'unknown'
-    entry = AuditLog(event_type=event_type, username=username,
+    safe_username = str(username).strip() if username else 'anonim'
+    entry = AuditLog(event_type=event_type, username=safe_username,
                      ip_address=ip, detail=detail)
     db.session.add(entry)
     db.session.commit()
@@ -283,13 +284,13 @@ def index():
         barang=barang_list,
         username=session.get('username'),
         role=session.get('role'),
-        chart_stok_labels=json.dumps(chart_stok_labels),
-        chart_stok_values=json.dumps(chart_stok_values),
+        chart_stok_labels=chart_stok_labels,
+        chart_stok_values=chart_stok_values,
         total_masuk=total_masuk,
         total_keluar=total_keluar,
-        chart_tren_labels=json.dumps(chart_tren_labels),
-        chart_tren_masuk=json.dumps(chart_tren_masuk),
-        chart_tren_keluar=json.dumps(chart_tren_keluar),
+        chart_tren_labels=chart_tren_labels,
+        chart_tren_masuk=chart_tren_masuk,
+        chart_tren_keluar=chart_tren_keluar,
         total_riwayat=len(riwayat_list)
     )
 
@@ -398,11 +399,14 @@ def tambah_barang():
     if 'user_id' not in session: return redirect(url_for('login'))
     nama = request.form.get('nama_barang', '').strip()
     if not nama:
-        return "Nama barang wajib diisi!", 400
-    barang_baru = Barang(nama_barang=nama, deskripsi=request.form.get('deskripsi', '').strip())
+        flash("⚠️ Nama barang wajib diisi!", "danger")
+        return redirect(url_for('index'))
+    deskripsi = request.form.get('deskripsi', '').strip()
+    barang_baru = Barang(nama_barang=nama, deskripsi=deskripsi)
     db.session.add(barang_baru)
     db.session.commit()
     log_activity('TAMBAH', session.get('username'), f"Admin menambahkan master barang baru: '{nama}'.")
+    flash(f"✅ Komoditas barang baru '{nama}' berhasil ditambahkan ke katalog!", "success")
     return redirect(url_for('index'))
 
 @app.route('/edit_barang/<int:id>', methods=['POST'])
@@ -416,12 +420,14 @@ def edit_barang(id):
     deskripsi_baru = request.form.get('deskripsi', '').strip()
 
     if not nama_baru:
-        return "Nama barang tidak boleh kosong!", 400
+        flash("⚠️ Nama barang tidak boleh kosong!", "danger")
+        return redirect(url_for('index'))
 
     barang.nama_barang = nama_baru
     barang.deskripsi = deskripsi_baru
     db.session.commit()
     log_activity('EDIT_BARANG', session.get('username'), f"Admin mengubah data barang ID {id}: '{nama_lama}' -> '{nama_baru}'.")
+    flash(f"✅ Data komoditas #{id} berhasil diperbarui menjadi '{nama_baru}'.", "success")
     return redirect(url_for('index'))
 
 @app.route('/hapus_barang/<int:id>', methods=['POST'])
@@ -435,6 +441,7 @@ def hapus_barang(id):
     db.session.delete(barang)
     db.session.commit()
     log_activity('HAPUS', session.get('username'), f"Menghapus barang: '{nama}' (ID: {id}).")
+    flash(f"🗑️ Barang '{nama}' (ID: {id}) beserta riwayat mutasinya berhasil dihapus permanen.", "info")
     return redirect(url_for('index'))
 
 @app.route('/restock_barang', methods=['POST'])
@@ -449,16 +456,29 @@ def restock_barang():
     jumlah_raw = request.form.get('jumlah')
 
     if not id_barang or not jumlah_raw:
-        return "Data restock barang tidak lengkap!", 400
+        flash("⚠️ Data restock tidak lengkap! Pilih barang dan masukkan jumlah unit.", "danger")
+        return redirect(url_for('index'))
 
     try:
         jumlah = int(jumlah_raw)
         if jumlah <= 0:
-            return "Jumlah unit restock harus lebih dari 0!", 400
-    except ValueError:
-        return "Jumlah unit restock tidak valid!", 400
+            flash("⚠️ Jumlah unit restock harus berupa bilangan positif (> 0)!", "danger")
+            return redirect(url_for('index'))
+    except (ValueError, TypeError):
+        flash("⚠️ Nilai unit restock yang dimasukkan tidak valid!", "danger")
+        return redirect(url_for('index'))
 
-    barang = Barang.query.get_or_404(int(id_barang))
+    try:
+        id_barang_int = int(id_barang)
+    except (ValueError, TypeError):
+        flash("⚠️ ID barang tidak valid!", "danger")
+        return redirect(url_for('index'))
+
+    barang = Barang.query.get(id_barang_int)
+    if not barang:
+        flash("⚠️ Komoditas barang yang dipilih tidak ditemukan dalam database!", "danger")
+        return redirect(url_for('index'))
+
     barang.jumlah_stok += jumlah
 
     # Simpan riwayat mutasi stok masuk
@@ -469,6 +489,7 @@ def restock_barang():
     user_aktor = session.get('username', 'Petugas')
     log_activity('RESTOCK', user_aktor,
                  f"Restock barang '{barang.nama_barang}': +{jumlah} unit (Total stok sekarang: {barang.jumlah_stok}).")
+    flash(f"📥 Sukses melakukan restock '{barang.nama_barang}' sebanyak +{jumlah} unit (Total stok: {barang.jumlah_stok}).", "success")
     return redirect(url_for('index'))
 
 @app.route('/update_stok/<int:id>', methods=['POST'])
@@ -476,16 +497,32 @@ def update_stok(id):
     if 'user_id' not in session: return redirect(url_for('login'))
 
     barang = Barang.query.get_or_404(id)
-    jenis = request.form['jenis']
-    jumlah = int(request.form['jumlah'])
+    jenis = request.form.get('jenis', '').strip()
+    jumlah_raw = request.form.get('jumlah', '')
+
+    if jenis not in ('masuk', 'keluar'):
+        flash("⚠️ Jenis mutasi stok tidak dikenali!", "danger")
+        return redirect(url_for('index'))
+
+    try:
+        jumlah = int(jumlah_raw)
+        if jumlah <= 0:
+            flash("⚠️ Jumlah mutasi stok harus lebih dari 0!", "danger")
+            return redirect(url_for('index'))
+    except (ValueError, TypeError):
+        flash("⚠️ Jumlah unit mutasi yang dimasukkan tidak valid!", "danger")
+        return redirect(url_for('index'))
 
     if jenis == 'masuk':
         barang.jumlah_stok += jumlah
+        flash(f"📥 Berhasil restock/tambah stok '{barang.nama_barang}' sebanyak {jumlah} unit (Sisa: {barang.jumlah_stok}).", "success")
     elif jenis == 'keluar':
         if barang.jumlah_stok >= jumlah:
             barang.jumlah_stok -= jumlah
+            flash(f"📤 Berhasil mencatat pengeluaran '{barang.nama_barang}' sebanyak {jumlah} unit (Sisa: {barang.jumlah_stok}).", "success")
         else:
-            return "Stok tidak mencukupi!", 400
+            flash(f"⚠️ Stok '{barang.nama_barang}' tidak mencukupi! Sisa stok gudang hanya {barang.jumlah_stok} unit.", "danger")
+            return redirect(url_for('index'))
 
     # Menyimpan jejak aktivitas stok untuk fitur laporan
     db.session.add(RiwayatStok(id_barang=barang.id, jenis=jenis, jumlah=jumlah, user_id=session['user_id']))
@@ -697,16 +734,19 @@ def laporan_pdf():
 
 @app.route('/laporan_csv')
 def laporan_csv():
-    """Fallback unduh format CSV."""
+    """Fallback unduh format CSV yang aman dari null pointer."""
     if 'user_id' not in session: return redirect(url_for('login'))
 
-    riwayat = RiwayatStok.query.all()
+    riwayat = RiwayatStok.query.order_by(RiwayatStok.tanggal.desc()).all()
     si = StringIO()
     cw = csv.writer(si)
     cw.writerow(['ID', 'Nama Barang', 'Jenis', 'Jumlah', 'Tanggal', 'Petugas'])
 
     for r in riwayat:
-        cw.writerow([r.id, r.barang.nama_barang, r.jenis, r.jumlah, r.tanggal.strftime("%Y-%m-%d %H:%M:%S"), r.user.username])
+        nama_b = r.barang.nama_barang if r.barang else f"Barang #{r.id_barang}"
+        petugas_str = r.user.username if r.user else "Anonim/Tamu"
+        tanggal_str = r.tanggal.strftime("%Y-%m-%d %H:%M:%S") if r.tanggal else "-"
+        cw.writerow([r.id, nama_b, r.jenis, r.jumlah, tanggal_str, petugas_str])
 
     log_activity('EXPORT_CSV', session.get('username'), "Mengunduh laporan stok dalam format CSV.")
     return Response(

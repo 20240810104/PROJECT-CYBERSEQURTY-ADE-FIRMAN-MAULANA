@@ -1,4 +1,4 @@
-"""
+r"""
 Script praktis untuk melihat seluruh isi database SQLite (inventory.db)
 Jalankan dengan: python view_db.py atau .\env\Scripts\python.exe view_db.py
 """

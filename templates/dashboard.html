@@ -106,6 +106,23 @@
 
 <div class="container-fluid px-4">
 
+    <!-- ==================== NOTIFIKASI FLASH SISTEM ==================== -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="row mt-3 mb-2">
+          <div class="col-12">
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category if category != 'error' else 'danger' }} alert-dismissible fade show shadow-sm" role="alert">
+                <i class="bi {{ 'bi-check-circle-fill text-success' if category == 'success' else 'bi-exclamation-triangle-fill text-danger' }} me-2"></i>
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+    {% endwith %}
+
     <!-- ==================== STAT CARDS ==================== -->
     <div class="row g-3 mb-4">
         <div class="col-md-4">
@@ -451,7 +468,6 @@
             </a>
         </div>
     </div>
-    </div>
 
     <footer class="text-center text-muted small mt-4 mb-3">
         Sistem Inventaris &copy; 2026 &mdash; Dijaga dengan 🔒 Bcrypt &amp; Rate Limiting
@@ -462,14 +478,14 @@
 <!-- Library Visualisasi Data (Chart.js) -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
-    // Data dari Flask Backend
-    const stokLabels  = {{ chart_stok_labels | safe }};
-    const stokValues  = {{ chart_stok_values | safe }};
+    // Data dari Flask Backend (Dienkripsi aman via filter tojson Jinja2)
+    const stokLabels  = {{ chart_stok_labels | tojson }};
+    const stokValues  = {{ chart_stok_values | tojson }};
     const totalMasuk  = {{ total_masuk }};
     const totalKeluar = {{ total_keluar }};
-    const trenLabels  = {{ chart_tren_labels | safe }};
-    const trenMasuk   = {{ chart_tren_masuk | safe }};
-    const trenKeluar  = {{ chart_tren_keluar | safe }};
+    const trenLabels  = {{ chart_tren_labels | tojson }};
+    const trenMasuk   = {{ chart_tren_masuk | tojson }};
+    const trenKeluar  = {{ chart_tren_keluar | tojson }};
 
     // -------------------------------------------------------------
     // 1. GRAFIK BATANG (BAR CHART): Sisa Stok per Komoditas Barang
