@@ -1,0 +1,28 @@
+# Virtual Environment
+env/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# SQLite Database & Instance
+instance/
+*.db
+*.sqlite3
+
+# Archives
+*.zip
+
+# OS generated
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audit Log – Sistem Inventaris</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f0f2f5; }
+
+        .navbar { box-shadow: 0 2px 10px rgba(0,0,0,0.15); }
+        .navbar-brand { font-weight: 700; }
+
+        .card { border: none; border-radius: 12px; box-shadow: 0 2px 15px rgba(0,0,0,0.08); }
+        .card-header { border-radius: 12px 12px 0 0 !important; border-bottom: none; padding: 1rem 1.25rem; }
+
+        .table thead th {
+            background: #212529;
+            color: white;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: none;
+            font-weight: 600;
+        }
+        .table tbody tr:hover { background-color: #f8f9ff; }
+        .table td { vertical-align: middle; border-color: #f0f2f5; font-size: 0.88rem; }
+
+        /* ── Badge per event type ── */
+        .badge-LOGIN_OK    { background:#d1fae5; color:#065f46; border:1px solid #6ee7b7; }
+        .badge-LOGIN_FAIL  { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; }
+        .badge-BLOCKED     { background:#fef3c7; color:#92400e; border:1px solid #fcd34d; }
+        .badge-LOGOUT      { background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; }
+        .badge-REGISTER    { background:#ede9fe; color:#5b21b6; border:1px solid #c4b5fd; }
+        .badge-TAMBAH      { background:#dcfce7; color:#166534; border:1px solid #86efac; }
+        .badge-HAPUS       { background:#ffe4e6; color:#9f1239; border:1px solid #fda4af; }
+        .badge-UPDATE_STOK { background:#dbeafe; color:#1e40af; border:1px solid #93c5fd; }
+        .badge-EDIT_BARANG { background:#fef3c7; color:#92400e; border:1px solid #fcd34d; }
+        .badge-EXPORT_CSV  { background:#f3f4f6; color:#374151; border:1px solid #d1d5db; }
+        .badge-CSRF_BLOCKED{ background:#ffe4e6; color:#be123c; border:1px solid #fecdd3; }
+
+        .event-badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+
+        /* ── Filter bar ── */
+        #filterInput { max-width: 280px; }
+        .filter-btn.active { background: #0d6efd; color: white; border-color: #0d6efd; }
+
+        /* ── Timestamp ── */
+        .ts { font-size: 0.78rem; color: #6b7280; }
+        .ts-date { font-weight: 600; color: #374151; }
+
+        /* ── Empty state ── */
+        .empty-icon { font-size: 3.5rem; color: #d1d5db; }
+    </style>
+</head>
+<body>
+
+<!-- ==================== NAVBAR ==================== -->
+<nav class="navbar navbar-dark bg-dark sticky-top mb-4">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/">
+            <i class="bi bi-box-seam-fill me-2 text-primary"></i>Sistem Inventaris
+        </a>
+        <div class="d-flex align-items-center gap-3">
+            <span class="text-white-50 small">
+                <i class="bi bi-person-circle me-1"></i>{{ username }}
+                <span class="badge bg-danger ms-1">Admin</span>
+            </span>
+            <a href="/" class="btn btn-sm btn-outline-light">
+                <i class="bi bi-arrow-left me-1"></i>Dashboard
+            </a>
+            <a href="/logout" class="btn btn-sm btn-outline-danger">
+                <i class="bi bi-box-arrow-right me-1"></i>Logout
+            </a>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid px-4">
+
+    <!-- ==================== HEADER ==================== -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h4 class="mb-0 fw-bold"><i class="bi bi-journal-text text-warning me-2"></i>Audit Log Keamanan</h4>
+            <small class="text-muted">Riwayat seluruh aktivitas sensitif sistem — hanya dapat diakses Admin</small>
+        </div>
+        <span class="badge bg-dark fs-6">{{ logs | length }} entri</span>
+    </div>
+
+    <!-- ==================== STAT SUMMARY ==================== -->
+    {% set login_ok   = logs | selectattr('event_type','eq','LOGIN_OK')   | list | length %}
+    {% set login_fail = logs | selectattr('event_type','eq','LOGIN_FAIL') | list | length %}
+    {% set blocked    = logs | selectattr('event_type','eq','BLOCKED')    | list | length %}
+    {% set hapus      = logs | selectattr('event_type','eq','HAPUS')      | list | length %}
+
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3">
+            <div class="card p-3 border-start border-success border-4">
+                <div class="text-muted small">Login Berhasil</div>
+                <div class="fs-4 fw-bold text-success">{{ login_ok }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card p-3 border-start border-danger border-4">
+                <div class="text-muted small">Login Gagal</div>
+                <div class="fs-4 fw-bold text-danger">{{ login_fail }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card p-3 border-start border-warning border-4">
+                <div class="text-muted small">IP Diblokir</div>
+                <div class="fs-4 fw-bold text-warning">{{ blocked }}</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card p-3 border-start border-danger border-4">
+                <div class="text-muted small">Barang Dihapus</div>
+                <div class="fs-4 fw-bold text-danger">{{ hapus }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== FILTER + SEARCH ==================== -->
+    <div class="card mb-3">
+        <div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
+            <input type="text" id="filterInput" class="form-control form-control-sm"
+                   placeholder="🔍 Cari username, detail, IP...">
+            <div class="d-flex flex-wrap gap-1 ms-auto">
+                <button class="btn btn-sm btn-outline-secondary filter-btn active" data-filter="ALL">Semua</button>
+                <button class="btn btn-sm btn-outline-success  filter-btn" data-filter="LOGIN_OK">Login ✓</button>
+                <button class="btn btn-sm btn-outline-danger   filter-btn" data-filter="LOGIN_FAIL">Login ✗</button>
+                <button class="btn btn-sm btn-outline-warning  filter-btn" data-filter="BLOCKED">Blokir</button>
+                <button class="btn btn-sm btn-outline-danger   filter-btn" data-filter="CSRF_BLOCKED">CSRF 🛡️</button>
+                <button class="btn btn-sm btn-outline-danger   filter-btn" data-filter="HAPUS">Hapus</button>
+                <button class="btn btn-sm btn-outline-primary  filter-btn" data-filter="REGISTER">Register</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TABEL LOG ==================== -->
+    <div class="card">
+        <div class="card-body p-0">
+            {% if logs %}
+            <div class="table-responsive">
+                <table class="table table-hover mb-0" id="auditTable">
+                    <thead>
+                        <tr>
+                            <th style="width:50px">#</th>
+                            <th style="width:155px">Waktu</th>
+                            <th style="width:130px">Tipe Event</th>
+                            <th style="width:130px">Username</th>
+                            <th style="width:120px">IP Address</th>
+                            <th>Detail Aktivitas</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logBody">
+                    {% for log in logs %}
+                        <tr data-event="{{ log.event_type }}">
+                            <td class="text-muted small">{{ log.id }}</td>
+                            <td>
+                                <span class="ts-date">{{ log.timestamp.strftime('%Y-%m-%d') }}</span><br>
+                                <span class="ts">{{ log.timestamp.strftime('%H:%M:%S') }}</span>
+                            </td>
+                            <td>
+                                <span class="event-badge badge-{{ log.event_type }}">
+                                    {% if log.event_type == 'LOGIN_OK'    %}<i class="bi bi-check-circle-fill me-1"></i>LOGIN OK
+                                    {% elif log.event_type == 'LOGIN_FAIL'%}<i class="bi bi-x-circle-fill me-1"></i>LOGIN GAGAL
+                                    {% elif log.event_type == 'BLOCKED'   %}<i class="bi bi-shield-x-fill me-1"></i>DIBLOKIR
+                                    {% elif log.event_type == 'LOGOUT'    %}<i class="bi bi-box-arrow-right me-1"></i>LOGOUT
+                                    {% elif log.event_type == 'REGISTER'  %}<i class="bi bi-person-plus-fill me-1"></i>REGISTER
+                                    {% elif log.event_type == 'TAMBAH'    %}<i class="bi bi-plus-circle-fill me-1"></i>TAMBAH
+                                    {% elif log.event_type == 'HAPUS'     %}<i class="bi bi-trash3-fill me-1"></i>HAPUS
+                                    {% elif log.event_type == 'UPDATE_STOK'%}<i class="bi bi-arrow-left-right me-1"></i>STOK
+                                    {% elif log.event_type == 'EDIT_BARANG'%}<i class="bi bi-pencil-square me-1"></i>EDIT
+                                    {% elif log.event_type == 'EXPORT_CSV'%}<i class="bi bi-file-earmark-spreadsheet me-1"></i>EXPORT
+                                    {% elif log.event_type == 'CSRF_BLOCKED'%}<i class="bi bi-shield-slash-fill me-1"></i>CSRF BLOCKED
+                                    {% else %}{{ log.event_type }}
+                                    {% endif %}
+                                </span>
+                            </td>
+                            <td>
+                                <i class="bi bi-person-fill text-secondary me-1"></i>
+                                <strong>{{ log.username }}</strong>
+                            </td>
+                            <td>
+                                <code class="text-secondary small">{{ log.ip_address }}</code>
+                            </td>
+                            <td class="text-secondary">{{ log.detail }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-5">
+                <i class="bi bi-journal-x empty-icon d-block mb-3"></i>
+                <p class="text-muted">Belum ada aktivitas yang tercatat.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <footer class="text-center text-muted small mt-4 mb-3">
+        Sistem Inventaris &copy; 2026 &mdash; Audit Log hanya dapat diakses oleh Admin
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // ── Filter by event type ──
+    const filterBtns = document.querySelectorAll('.filter-btn');
+    const rows = document.querySelectorAll('#logBody tr');
+
+    filterBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            filterBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const f = btn.dataset.filter;
+            rows.forEach(r => {
+                r.style.display = (f === 'ALL' || r.dataset.event === f) ? '' : 'none';
+            });
+            // Reapply text search after filter
+            applySearch();
+        });
+    });
+
+    // ── Text search ──
+    const searchInput = document.getElementById('filterInput');
+    function applySearch() {
+        const q = searchInput.value.toLowerCase();
+        const activeFilter = document.querySelector('.filter-btn.active').dataset.filter;
+        rows.forEach(r => {
+            const matchEvent  = activeFilter === 'ALL' || r.dataset.event === activeFilter;
+            const matchSearch = r.textContent.toLowerCase().includes(q);
+            r.style.display = (matchEvent && matchSearch) ? '' : 'none';
+        });
+    }
+    searchInput.addEventListener('input', applySearch);
+</script>
+</body>
+</html>
+
